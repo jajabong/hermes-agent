@@ -479,6 +479,51 @@ class TestCLI:
         # assert the user-visible signal: a stderr error message. Whether
         # the exit code stays 0 is a separate (pre-existing) issue.
         assert "does not exist" in r.stderr
+    def test_switch_clears_stale_env_var(self, tmp_path):
+        """Regression: when HERMES_KANBAN_BOARD shadows the persisted file,
+        ``boards switch`` must clear the env var so the file takes effect in
+        the current shell session — otherwise the user sees "Active board is
+        now 'X'" while ``boards list`` keeps reporting the old env-bound
+        board.
+        """
+        env = {"HERMES_HOME": str(tmp_path)}
+        assert _cli(["boards", "create", "proja"], env_extra=env).returncode == 0
+        assert _cli(["boards", "create", "projb"], env_extra=env).returncode == 0
+
+        # Establish persisted file = proja, then layer env override = projb.
+        assert _cli(["boards", "switch", "proja"], env_extra=env).returncode == 0
+        env["HERMES_KANBAN_BOARD"] = "projb"
+        # Sanity: env currently wins.
+        before = json.loads(_cli(["boards", "list", "--json"], env_extra=env).stdout)
+        assert [b["slug"] for b in before if b["is_current"]] == ["projb"]
+
+        # Switch to default while env still = projb. The fix must clear env
+        # for this process so the next list call sees "default".
+        res = _cli(["boards", "switch", "default"], env_extra=env)
+        assert res.returncode == 0, res.stderr
+        assert "also cleared HERMES_KANBAN_BOARD env var" in res.stdout
+
+        # Drop the env override (simulates: user runs the next command in a
+        # shell where the cleared process state is gone — i.e. exactly the
+        # same condition as if they had `unset HERMES_KANBAN_BOARD`
+        # themselves, which the new message tells them to do).
+        env_after = {k: v for k, v in env.items() if k != "HERMES_KANBAN_BOARD"}
+        after = json.loads(
+            _cli(["boards", "list", "--json"], env_extra=env_after).stdout
+        )
+        current = [b["slug"] for b in after if b["is_current"]]
+        assert current == ["default"]
+
+    def test_switch_no_env_var_keeps_short_message(self, tmp_path):
+        """When HERMES_KANBAN_BOARD is unset (or already matches the target),
+        ``boards switch`` must not print the "also cleared env var" line —
+        that would mislead users who never had an env override.
+        """
+        env = {"HERMES_HOME": str(tmp_path)}
+        res = _cli(["boards", "switch", "default"], env_extra=env)
+        assert res.returncode == 0, res.stderr
+        assert "cleared HERMES_KANBAN_BOARD" not in res.stdout
+        assert "Active board is now 'default'." in res.stdout
 
     def test_boards_rm_archives(self, tmp_path):
         env = {"HERMES_HOME": str(tmp_path)}
