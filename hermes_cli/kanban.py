@@ -241,7 +241,11 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
 
     b_switch = boards_sub.add_parser(
         "switch", aliases=["use"],
-        help="Set the active board for subsequent CLI calls",
+        help="Set the active board for subsequent CLI calls. "
+             "If HERMES_KANBAN_BOARD is set in this shell session, it is "
+             "cleared so the persisted file (<root>/kanban/current) takes "
+             "effect immediately; to keep the override across shells, "
+             "re-export the variable after switching.",
     )
     b_switch.add_argument("slug")
 
@@ -915,7 +919,25 @@ def _cmd_boards_switch(args: argparse.Namespace) -> int:
         )
         return 1
     kb.set_current_board(normed)
-    print(f"Active board is now {normed!r}.")
+    # Clear the HERMES_KANBAN_BOARD env var for this process if it was
+    # shadowing the persisted file. Without this, get_current_board() keeps
+    # resolving to the env value and the just-written file has no visible
+    # effect until the user manually `unset HERMES_KANBAN_BOARD`.
+    cleared_env = False
+    prev_env = os.environ.get("HERMES_KANBAN_BOARD", "")
+    if prev_env:
+        try:
+            prev_normed = kb._normalize_board_slug(prev_env)
+        except ValueError:
+            prev_normed = ""
+        if prev_normed != normed:
+            os.environ.pop("HERMES_KANBAN_BOARD", None)
+            cleared_env = True
+    if cleared_env:
+        print(f"Active board is now {normed!r} "
+              f"(also cleared HERMES_KANBAN_BOARD env var).")
+    else:
+        print(f"Active board is now {normed!r}.")
     return 0
 
 

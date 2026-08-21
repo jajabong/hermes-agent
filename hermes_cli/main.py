@@ -9703,8 +9703,37 @@ def _plugin_cli_discovery_needed() -> bool:
     return True
 
 
+def _scrub_leaked_delegated_child_env() -> None:
+    """Strip a leaked ``HERMES_DELEGATED_CHILD_CONTEXT=1`` from this process env.
+
+    The marker is set on purpose by ``scrub_kanban_env`` (see
+    ``agent/delegation_context.py``) so subprocesses spawned *from* a
+    ``delegate_task`` child preserve their lineage across ``fork``. When such
+    a subprocess happens to be a fresh top-level ``hermes`` CLI invocation
+    (root session, not a delegate child) the marker leaks in: the env says
+    "delegated child" but the ``_DELEGATED_CHILD_CONTEXT`` ContextVar is unset.
+
+    That mismatch trips the kanban ``_assert_not_delegated_child_mutation``
+    guard and blocks the root session from running kanban commands — even
+    though it isn't actually a delegate child.
+
+    Clear the env marker when the ContextVar confirms this is a root session.
+    Does nothing when the ContextVar is True (genuine delegate child).
+    """
+    try:
+        from agent.delegation_context import is_delegated_child_context
+    except Exception:
+        return
+    if os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT") == "1" and not is_delegated_child_context():
+        os.environ.pop("HERMES_DELEGATED_CHILD_CONTEXT", None)
+
+
 def main():
     """Main entry point for hermes CLI."""
+    # Strip a leaked ``HERMES_DELEGATED_CHILD_CONTEXT=1`` from the env before
+    # any kanban / CLI guard runs (see _scrub_leaked_delegated_child_env).
+    _scrub_leaked_delegated_child_env()
+
     # Force UTF-8 stdio on Windows before anything prints.  No-op elsewhere.
     try:
         from hermes_cli.stdio import configure_windows_stdio
